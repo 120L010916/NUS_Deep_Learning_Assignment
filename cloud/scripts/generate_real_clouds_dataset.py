@@ -51,7 +51,51 @@ def process(
     Returns:
         None
     """
-    return NotImplementedError
+    # 验证patch尺寸
+    if patch_size != [256, 256]:
+        raise ValueError("Patch size must be (256, 256) as per assignment requirements.")
+    
+    # 验证裁剪尺寸
+    crop_width = crop[2] - crop[0]
+    crop_height = crop[3] - crop[1]
+    if crop_width != 1024 or crop_height != 512:
+        raise ValueError("Crop dimensions must result in 1024x512 image.")
+    
+    # 确保输出目录存在
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # 全局patch索引
+    global_patch_index = 0
+    
+    # 遍历所有文件名
+    for filename in tqdm(filenames, desc="Processing images"):
+        # 加载图片并应用裁剪
+        img = load_image(filename, crop=crop)
+        if img is None:
+            print(f"Skipping {filename} due to load error.")
+            continue
+        
+        # 验证裁剪后尺寸
+        if img.shape[:2] != (512, 1024):
+            print(f"Warning: {filename} has unexpected size {img.shape[:2]}, expected (512, 1024).")
+            continue
+        
+        # 分解为8个256x256的patch
+        try:
+            patches = patchify(img, patch_size)
+            if len(patches) != 8:
+                print(f"Warning: Expected 8 patches for {filename}, got {len(patches)}.")
+                continue
+        except Exception as e:
+            print(f"Error patchifying {filename}: {e}")
+            continue
+        
+        # 保存patch
+        try:
+            save_patches(patches, output_dir, global_patch_index)
+            global_patch_index += len(patches)  # 更新索引
+        except Exception as e:
+            print(f"Error saving patches for {filename}: {e}")
 
 
 def main():

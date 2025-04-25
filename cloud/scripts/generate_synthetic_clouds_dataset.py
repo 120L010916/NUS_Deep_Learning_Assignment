@@ -5,7 +5,10 @@ from PIL import Image
 from tqdm import tqdm
 import argparse
 from utils import load_image, patchify, save_patches, get_filenames
-
+try:
+    from noise import pnoise2
+except ImportError:
+    raise ImportError("Please install the 'noise' package: pip install noise")
 
 def build_argparser() -> argparse.ArgumentParser:
     """
@@ -56,7 +59,34 @@ def generate_synthetic_clouds(
     Returns:
         A numpy array of shape shape with the generated noise.
     """
-    return NotImplementedError
+    height, width = shape
+    res_y, res_x = res
+    
+    # 验证 shape 是否为 res 的倍数
+    if height % res_y != 0 or width % res_x != 0:
+        raise ValueError(f"Shape {shape} must be a multiple of res {res}.")
+    
+    # 初始化噪声数组
+    noise = np.zeros(shape, dtype=np.float32)
+    
+    # 生成 Perlin 噪声
+    for y in range(height):
+        for x in range(width):
+            # 归一化坐标到噪声空间
+            noise[y, x] = pnoise2(
+                x / res_x, y / res_y,
+                octaves=octaves,
+                persistence=0.5,  # 默认值，控制振幅
+                lacunarity=2.0,   # 默认值，控制频率
+                repeatx=width // res_x,
+                repeaty=height // res_y,
+                base=0  # 随机种子
+            )
+    
+    # 归一化噪声到 [0, 1]
+    noise = (noise - noise.min()) / (noise.max() - noise.min())
+    
+    return noise
 
 
 def apply_synthetic_clouds_to_mask(
@@ -73,7 +103,21 @@ def apply_synthetic_clouds_to_mask(
         A numpy array of the same shape as the mask with the noise
         applied.
     """
-    return NotImplementedError
+    # 验证输入形状
+    if noise.shape != mask.shape:
+        raise ValueError(f"Noise shape {noise.shape} does not match mask shape {mask.shape}.")
+    
+    # 归一化噪声到 [0, 255]
+    noise_normalized = (noise - noise.min()) / (noise.max() - noise.min()) * 255.0
+    
+    # 将噪声与 mask 结合
+    # mask 是二值图像（0 或 255），噪声填充非边界区域
+    result = np.where(mask == 255, mask, noise_normalized)
+    
+    # 裁剪到 [0, 255] 并转换为 uint8
+    result = np.clip(result, 0, 255).astype(np.uint8)
+    
+    return result
 
 
 def process(
@@ -94,7 +138,60 @@ def process(
     Returns:
         None
     """
-    return NotImplementedError
+    # 验证 patch 尺寸
+    if patch_size != [256, 256]:
+        raise ValueError("Patch size must be (256, 256) as per assignment requirements.")
+    
+    # 验证裁剪尺寸
+    crop_width = crop[2] - crop[0]
+    crop_height = crop[3] - crop[1]
+    if crop_width != 1024 or crop_height != 512:
+        raise ValueError("Crop dimensions must result in 1024x512 image.")
+    
+    # 确保输出目录存在
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # 加载 mask
+    mask = load_image(input_mask, convert="L")  # 加载为灰度图
+    if mask is None:
+        raise ValueError(f"Failed to load mask from {input_mask}.")
+    
+    # 应用裁剪到 mask
+    mask = load_image(input_mask, crop=crop, convert="L")
+    if mask.shape[:2] != (512, 1024):
+        raise ValueError(f"Mask after cropping has unexpected size {mask.shape[:2]}, expected (512, 1024).")
+    
+    # 全局 patch 索引
+    global_patch_index = 0
+    
+    # 生成 N 张合成云图
+    for _ in tqdm(range(N), desc="Generating synthetic clouds"):
+        # 生成 Perlin 噪声（大小与裁剪后图片一致）
+        noise = generate_synthetic_clouds(
+            shape=(512, 1024),
+            res=(64, 128),  # 噪声周期，调整以控制云纹理
+            octaves=6       # 多层噪声，增加细节
+        )
+        
+        # 应用噪声到 mask
+        synthetic_image = apply_synthetic_clouds_to_mask(noise, mask)
+        
+        # 分解为 8 个 256x256 的 patch
+        try:
+            patches = patchify(synthetic_image, patch_size)
+            if len(patches) != 8:
+                print(f"Warning: Expected 8 patches, got {len(patches)}.")
+                continue
+        except Exception as e:
+            print(f"Error patchifying synthetic image: {e}")
+            continue
+        
+        # 保存 patches
+        try:
+            save_patches(patches, output_dir, global_patch_index)
+            global_patch_index += len(patches)  # 更新索引
+        except Exception as e:
+            print(f"Error saving patches: {e}")
 
 
 def main():

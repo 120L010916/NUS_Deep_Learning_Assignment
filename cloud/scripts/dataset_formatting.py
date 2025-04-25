@@ -2,7 +2,7 @@ from typing import List, Tuple
 import os
 from pathlib import Path
 import argparse
-
+import random
 
 def build_argparser() -> argparse.ArgumentParser:
     """
@@ -41,7 +41,34 @@ def browse_folder(
     """
     Browse a directory and return a list of all the png files in it and its subfolder.
     """
-    return NotImplementedError
+    # 支持 .png 和 .jpg 文件（任务要求 PNG，但之前保存为 JPG）
+    valid_extensions = (".png", ".jpg", ".jpeg")
+    
+    # 转换为 Path 对象
+    path_A = Path(path) / A
+    path_B = Path(path) / B
+    
+    # 遍历 modality A 的文件
+    files_A = []
+    if path_A.exists():
+        for root, _, files in os.walk(path_A):
+            files_A.extend(
+                Path(root) / f for f in files if f.lower().endswith(valid_extensions)
+            )
+    
+    # 遍历 modality B 的文件
+    files_B = []
+    if path_B.exists():
+        for root, _, files in os.walk(path_B):
+            files_B.extend(
+                Path(root) / f for f in files if f.lower().endswith(valid_extensions)
+            )
+    
+    # 按文件名排序，确保一致性
+    files_A.sort()
+    files_B.sort()
+    
+    return files_A, files_B
 
 
 def check_existence(
@@ -53,7 +80,9 @@ def check_existence(
     Returns:
         None
     """
-    return NotImplementedError
+    for filepath in filenames:
+        if not filepath.exists():
+            raise FileNotFoundError(f"File does not exist: {filepath}")
 
 
 def create_folders(
@@ -67,7 +96,9 @@ def create_folders(
     Returns:
         None
     """
-    return NotImplementedError
+    for folder_name in folder_list:
+        folder_path = input_dir / folder_name
+        folder_path.mkdir(parents=True, exist_ok=True)
 
 
 def split_train_test(
@@ -81,7 +112,22 @@ def split_train_test(
     Returns:
         Tuple[List[Path], List[Path]]: Training and testing filenames.
     """
-    return NotImplementedError
+    # 验证 alpha
+    if not 0 < alpha < 1:
+        raise ValueError(f"Alpha must be between 0 and 1, got {alpha}.")
+    
+    # 随机打乱文件列表
+    filenames_shuffled = filenames.copy()
+    random.shuffle(filenames_shuffled)
+    
+    # 计算训练集大小
+    train_size = int(len(filenames_shuffled) * alpha)
+    
+    # 划分训练和测试集
+    train_files = filenames_shuffled[:train_size]
+    test_files = filenames_shuffled[train_size:]
+    
+    return train_files, test_files
 
 
 def create_symlinks(
@@ -97,7 +143,20 @@ def create_symlinks(
     Returns:
         None
     """
-    return NotImplementedError
+    for filepath in filenames:
+        # 目标链接路径（保持原文件名）
+        link_path = split_dir / filepath.name
+        
+        # 如果链接已存在，先删除
+        if link_path.exists() or link_path.is_symlink():
+            link_path.unlink()
+        
+        # 使用绝对路径创建符号链接
+        abs_filepath = filepath.resolve()  # 获取绝对路径
+        try:
+            link_path.symlink_to(abs_filepath)
+        except OSError as e:
+            print(f"Failed to create symlink for {abs_filepath}: {e}")
 
 
 def process(input_dir: str, A: str, B: str, folders: List[str], alpha: float) -> None:
@@ -112,7 +171,32 @@ def process(input_dir: str, A: str, B: str, folders: List[str], alpha: float) ->
     Returns:
         None
     """
-    return NotImplementedError
+    # 转换为 Path 对象
+    input_dir_path = Path(input_dir)
+    
+    # 创建子文件夹（trainA, trainB, testA, testB）
+    create_folders(input_dir_path, folders)
+    
+    # 获取 modality A 和 B 的文件列表
+    files_A, files_B = browse_folder(input_dir_path.parent, A, B)
+    
+    # 检查文件是否存在
+    check_existence(files_A)
+    check_existence(files_B)
+    
+    # 划分训练和测试集
+    train_A, test_A = split_train_test(files_A, alpha)
+    train_B, test_B = split_train_test(files_B, alpha)
+    
+    # 创建符号链接
+    create_symlinks(train_A, input_dir_path, input_dir_path / folders[0])  # trainA
+    create_symlinks(train_B, input_dir_path, input_dir_path / folders[1])  # trainB
+    create_symlinks(test_A, input_dir_path, input_dir_path / folders[2])   # testA
+    create_symlinks(test_B, input_dir_path, input_dir_path / folders[3])   # testB
+    
+    print(f"Dataset formatted successfully in {input_dir_path}")
+    print(f"trainA: {len(train_A)} files, trainB: {len(train_B)} files")
+    print(f"testA: {len(test_A)} files, testB: {len(test_B)} files")
 
 
 def main():
